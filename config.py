@@ -41,6 +41,7 @@ if not os.path.exists(answer_dir):
     os.makedirs(answer_dir)
 
 flags.DEFINE_string("mode", "train", "train/debug/test")
+#flags.DEFINE_string("mode", "data", "train/debug/test")
 
 flags.DEFINE_string("target_dir", target_dir, "")
 flags.DEFINE_string("event_dir", event_dir, "")
@@ -67,14 +68,14 @@ flags.DEFINE_string("answer_file", answer_file, "")
 
 flags.DEFINE_integer("glove_char_size", 94, "Corpus size for Glove")
 flags.DEFINE_integer("glove_word_size", int(2.2e6), "Corpus size for Glove")
-flags.DEFINE_integer("glove_dim", 100, "Embedding dimension for Glove")
-flags.DEFINE_integer("char_dim", 64, "Embedding dimension for char")
+flags.DEFINE_integer("glove_dim", 64, "Embedding dimension for Glove")
+flags.DEFINE_integer("char_dim", 32, "Embedding dimension for char")
 
 flags.DEFINE_integer("para_limit", 350, "Limit length for paragraph")
 flags.DEFINE_integer("ques_limit", 50, "Limit length for question")
 flags.DEFINE_integer("ans_limit", 30, "Limit length for answers")
-flags.DEFINE_integer("test_para_limit", 400, "Limit length for paragraph in test file")
-flags.DEFINE_integer("test_ques_limit", 100, "Limit length for question in test file")
+flags.DEFINE_integer("test_para_limit", 350, "Limit length for paragraph in test file")
+flags.DEFINE_integer("test_ques_limit", 50, "Limit length for question in test file")
 flags.DEFINE_integer("char_limit", 16, "Limit length for character")
 flags.DEFINE_integer("word_count_limit", -1, "Min count for word")
 flags.DEFINE_integer("char_count_limit", -1, "Min count for char")
@@ -84,11 +85,12 @@ flags.DEFINE_integer("num_threads", 4, "Number of threads in input pipeline")
 flags.DEFINE_boolean("is_bucket", False, "build bucket batch iterator or not")
 flags.DEFINE_list("bucket_range", [40, 401, 40], "the range of bucket")
 
-flags.DEFINE_integer("batch_size", 16, "Batch size")
-flags.DEFINE_integer("num_steps", 30000, "Number of steps")
-flags.DEFINE_integer("checkpoint", 1000, "checkpoint to save and evaluate the model")
-flags.DEFINE_integer("period", 100, "period to save batch loss")
-flags.DEFINE_integer("val_num_batches", 150, "Number of batches to evaluate the model")
+flags.DEFINE_integer("batch_size", 8, "Batch size")
+flags.DEFINE_integer("num_steps", 3000, "Number of steps")
+flags.DEFINE_integer("evalpoint", 10, "checkpoint to evaluate the model")
+flags.DEFINE_integer("checkpoint", 500, "checkpoint to save the model")
+flags.DEFINE_integer("period", 10, "period to save batch loss")
+flags.DEFINE_integer("val_num_batches", 5, "Number of batches to evaluate the model")
 flags.DEFINE_float("dropout", 0.1, "Dropout prob across the layers")
 flags.DEFINE_float("dropout_char", 0.05, "Dropout prob across the layers")
 flags.DEFINE_float("grad_clip", 5.0, "Global Norm gradient clipping rate")
@@ -116,4 +118,4 @@ config = flags.FLAGS
 device = torch.device("cuda" if torch.cuda.is_available() else "cpu")
 cpu = torch.device("cpu")
 
-cudnn.enabled = False
+cudnn.enabled = True

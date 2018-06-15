@@ -15,6 +15,7 @@ import torch.nn.functional as F
 import torch.optim as optim
 import torch.cuda
 from torch.utils.data import Dataset, DataLoader
+from torch.autograd import Variable
 
 
 class SQuADDataset(Dataset):
@@ -128,6 +129,7 @@ def evaluate_batch(model, eval_file, dataset):
     answer_dict = {}
     losses = []
     num_batches = len(dataset)
+    # with torch.no_grad():
     for i in tqdm(range(num_batches), total=num_batches):
         (Cwid, Ccid, Qwid, Qcid, y1, y2, ids) = dataset[i]
         Cwid, Ccid, Qwid, Qcid = Cwid.to(device), Ccid.to(device), Qwid.to(device), Qcid.to(device)
@@ -137,9 +139,11 @@ def evaluate_batch(model, eval_file, dataset):
         loss2 = F.cross_entropy(p2, y2)
         loss = loss1 + loss2
         losses.append(loss.item())
-        del loss, p1, p2
+        del Cwid, Ccid, Qwid, Qcid#, y1, y2, ids
+        del loss1, loss2, loss, p1, p2
         answer_dict_, _ = convert_tokens(
             eval_file, ids.tolist(), y1.tolist(), y2.tolist())
+        del y1, y2, ids
         answer_dict.update(answer_dict_)
     loss = np.mean(losses)
     metrics = evaluate(eval_file, answer_dict)
@@ -168,6 +172,8 @@ def train(config):
     train_dataset = SQuADDataset(config.train_record_file, config.num_steps, config.batch_size)
     dev_dataset = SQuADDataset(config.dev_record_file, config.val_num_batches, config.batch_size)
 
+    train_loader = torch.utils.data.DataLoader(dataset=train_dataset, batch_size=64, shuffle=True)
+
     lr = config.learning_rate
 
     model = QANet(word_mat, char_mat).to(device)
@@ -178,8 +184,12 @@ def train(config):
     scheduler = optim.lr_scheduler.LambdaLR(optimizer, lr_lambda=lambda ee: crit * math.log2(
         ee + 1) if ee + 1 <= 1000 else lr)
 
+    best_f1 = 0
+    best_em = 0
+    patience = 0
     for ep in tqdm(range(config.num_steps), total=config.num_steps):
         model.zero_grad()
+        optimizer.zero_grad()
         (Cwid, Ccid, Qwid, Qcid, y1, y2, ids) = train_dataset[ep]
         Cwid, Ccid, Qwid, Qcid = Cwid.to(device), Ccid.to(device), Qwid.to(device), Qcid.to(device)
         p1, p2 = model(Cwid, Ccid, Qwid, Qcid)
@@ -187,15 +197,24 @@ def train(config):
         loss1 = F.cross_entropy(p1, y1)
         loss2 = F.cross_entropy(p2, y2)
         loss = loss1 + loss2
-        loss.backward(retain_graph=True)
-        scheduler.step()
-        del loss, p1, p2
-        if (ep + 1) % config.checkpoint == 0:
-            del Cwid, Ccid, Qwid, Qcid, y1, y2, p1, p2, loss
+        #print ('loss.backward',ep)
+        if (ep + 1) % config.evalpoint != 0:
+            loss.backward(retain_graph=True)
+            scheduler.step()
+            del Cwid, Ccid, Qwid, Qcid, y1, y2, ids
+            del loss1, loss2, loss, p1, p2
+        elif (ep + 1) % config.evalpoint == 0:
+            #loss.backward(retain_graph=True)
+            loss.backward()
+            scheduler.step()
+            del Cwid, Ccid, Qwid, Qcid, y1, y2, ids
+            del loss1, loss2, loss, p1, p2
+            #del Cwid, Ccid, Qwid, Qcid, y1, y2#, p1, p2, loss1, loss2, loss
             torch.cuda.empty_cache()
             metric = evaluate_batch(model, dev_eval_file, dev_dataset)
             log_ = "EPOCH {:8d} loss {:8f} F1 {:8f} EM {:8f}\n".format(ep, metric["loss"], metric["f1"],
                                                                        metric["exact_match"])
+            print(log_)
             train_log.write(log_)
             train_log.flush()
             dev_f1 = metric["f1"]
@@ -209,8 +228,11 @@ def train(config):
                 best_em = max(best_em, dev_em)
                 best_f1 = max(best_f1, dev_f1)
 
-            fn = os.path.join(config.save_dir, "model_{}.ckpt".format(ep))
-            torch.save(model, fn, pickle_protocol=False)
+            if (ep + 1) % config.checkpoint == 0:
+                fn = os.path.join(config.save_dir, "model_{}.ckpt".format(ep))
+                torch.save(model.state_dict(), fn, pickle_protocol=False)
+                #model.load_state_dict(torch.load('model_0.ckpt'))
+            torch.cuda.empty_cache()
 
 
 def test(config):
@@ -224,6 +246,7 @@ def dev(config):
 
 
 def main(_):
+    print('mode:{}\tdevice:{}'.format(config.mode, device))
     if config.mode == "train":
         train(config)
     elif config.mode == "data":

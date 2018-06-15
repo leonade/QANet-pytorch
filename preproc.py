@@ -93,7 +93,9 @@ def get_embedding(counter, data_type, limit=-1, emb_file=None, vec_size=None):
         with open(emb_file, "r", encoding="utf-8") as fh:
             for line in tqdm(fh):
                 array = line.split()
-                word = "".join(array[0:-vec_size])
+                vector_size = max(vec_size, len(array)-1)
+                #word = "".join(array[0:-vec_size])
+                word = array[0]
                 vector = list(map(float, array[-vec_size:]))
                 if word in counter and counter[word] > limit:
                     embedding_dict[word] = vector
@@ -154,12 +156,12 @@ def convert_to_features(config, data, word2idx_dict, char2idx_dict):
         for each in (word, word.lower(), word.capitalize(), word.upper()):
             if each in word2idx_dict:
                 return word2idx_dict[each]
-        return 1
+        return word2idx_dict['--NULL--']
 
     def _get_char(char):
         if char in char2idx_dict:
             return char2idx_dict[char]
-        return 1
+        return char2idx_dict['--NULL--']
 
     for i, token in enumerate(example["context_tokens"]):
         context_idxs[i] = _get_word(token)
@@ -205,7 +207,7 @@ def build_features(config, examples, data_type, out_file, word2idx_dict, char2id
     y1s = np.zeros([N], dtype=np.int32)
     y2s = np.zeros([N], dtype=np.int32)
     ids = np.zeros([N], dtype=np.int64)
-    for n, example in tqdm(enumerate(examples)):
+    for n, example in enumerate(tqdm(examples)):
         total_ += 1
 
         if filter_func(example, is_test):
@@ -217,26 +219,34 @@ def build_features(config, examples, data_type, out_file, word2idx_dict, char2id
             for each in (word, word.lower(), word.capitalize(), word.upper()):
                 if each in word2idx_dict:
                     return word2idx_dict[each]
-            return 1
+            return word2idx_dict['--NULL--']
 
         def _get_char(char):
             if char in char2idx_dict:
                 return char2idx_dict[char]
-            return 1
+            return char2idx_dict['--NULL--']
 
         for i, token in enumerate(example["context_tokens"]):
+            if i == para_limit:
+                break
             context_idxs[n][i] = _get_word(token)
 
         for i, token in enumerate(example["ques_tokens"]):
+            if i == ques_limit:
+                break
             ques_idxs[n][i] = _get_word(token)
 
         for i, token in enumerate(example["context_chars"]):
+            if i == para_limit:
+                break
             for j, char in enumerate(token):
                 if j == char_limit:
                     break
                 context_char_idxs[n, i, j] = _get_char(char)
 
         for i, token in enumerate(example["ques_chars"]):
+            if i == ques_limit:
+                break
             for j, char in enumerate(token):
                 if j == char_limit:
                     break
@@ -256,8 +266,8 @@ def build_features(config, examples, data_type, out_file, word2idx_dict, char2id
 def save(filename, obj, message=None):
     if message is not None:
         print("Saving {}...".format(message))
-        with open(filename, "w") as fh:
-            json.dump(obj, fh)
+    with open(filename, "w") as fh:
+        json.dump(obj, fh)
 
 
 def preproc(config):
