@@ -1,4 +1,3 @@
-import random
 from tqdm import tqdm
 import spacy
 import ujson as json
@@ -79,7 +78,6 @@ def process_file(filename, data_type, word_counter, char_counter):
                     examples.append(example)
                     eval_examples[str(total)] = {
                         "context": context, "spans": spans, "answers": answer_texts, "uuid": qa["id"]}
-        random.shuffle(examples)
         print("{} questions in total".format(len(examples)))
     return examples, eval_examples
 
@@ -133,9 +131,9 @@ def convert_to_features(config, data, word2idx_dict, char2idx_dict):
     example['context_chars'] = [list(token) for token in example['context_tokens']]
     example['ques_chars'] = [list(token) for token in example['ques_tokens']]
 
-    para_limit = config.test_para_limit
-    ques_limit = config.test_ques_limit
-    ans_limit = 100
+    para_limit = config.para_limit
+    ques_limit = config.ques_limit
+    ans_limit = config.ans_limit
     char_limit = config.char_limit
 
     def filter_func(example):
@@ -185,9 +183,9 @@ def convert_to_features(config, data, word2idx_dict, char2idx_dict):
 
 
 def build_features(config, examples, data_type, out_file, word2idx_dict, char2idx_dict, is_test=False):
-    para_limit = config.test_para_limit if is_test else config.para_limit
-    ques_limit = config.test_ques_limit if is_test else config.ques_limit
-    ans_limit = 100 if is_test else config.ans_limit
+    para_limit = config.para_limit
+    ques_limit = config.ques_limit
+    ans_limit = config.ans_limit
     char_limit = config.char_limit
 
     def filter_func(example, is_test=False):
@@ -207,6 +205,13 @@ def build_features(config, examples, data_type, out_file, word2idx_dict, char2id
     y1s = np.zeros([N], dtype=np.int32)
     y2s = np.zeros([N], dtype=np.int32)
     ids = np.zeros([N], dtype=np.int64)
+    # context_idxs = []
+    # context_char_idxs = []
+    # ques_idxs = []
+    # ques_char_idxs = []
+    # y1s = []
+    # y2s = []
+    # ids = []
     for n, example in enumerate(tqdm(examples)):
         total_ += 1
 
@@ -226,6 +231,11 @@ def build_features(config, examples, data_type, out_file, word2idx_dict, char2id
                 return char2idx_dict[char]
             return char2idx_dict['--NULL--']
 
+        context_idx = np.zeros([para_limit], dtype=np.int32)
+        context_char_idx = np.zeros([para_limit, char_limit], dtype=np.int32)
+        ques_idx = np.zeros([ques_limit], dtype=np.int32)
+        ques_char_idx = np.zeros([ques_limit, char_limit], dtype=np.int32)
+
         for i, token in enumerate(example["context_tokens"]):
             if i == para_limit:
                 break
@@ -242,7 +252,8 @@ def build_features(config, examples, data_type, out_file, word2idx_dict, char2id
             for j, char in enumerate(token):
                 if j == char_limit:
                     break
-                context_char_idxs[n, i, j] = _get_char(char)
+                context_char_idx[i, j] = _get_char(char)
+        context_char_idxs.append(context_char_idx)
 
         for i, token in enumerate(example["ques_chars"]):
             if i == ques_limit:
@@ -250,14 +261,17 @@ def build_features(config, examples, data_type, out_file, word2idx_dict, char2id
             for j, char in enumerate(token):
                 if j == char_limit:
                     break
-                ques_char_idxs[n, i, j] = _get_char(char)
+                ques_char_idx[i, j] = _get_char(char)
+        ques_char_idxs.append(ques_char_idx)
 
         start, end = example["y1s"][-1], example["y2s"][-1]
-        y1s[n], y2s[n] = start, end
-        ids[n] = example["id"]
+        y1s.append(start)
+        y2s.append(end)
+        ids.append(example["id"])
 
-    np.savez(out_file, context_idxs=context_idxs, context_char_idxs=context_char_idxs, ques_idxs=ques_idxs,
-             ques_char_idxs=ques_char_idxs, y1s=y1s, y2s=y2s, ids=ids)
+    np.savez(out_file, context_idxs=np.array(context_idxs), context_char_idxs=np.array(context_char_idxs),
+             ques_idxs=np.array(ques_idxs), ques_char_idxs=np.array(ques_char_idxs), y1s=np.array(y1s),
+             y2s=np.array(y2s), ids=np.array(ids))
     print("Built {} / {} instances of features in total".format(total, total_))
     meta["total"] = total
     return meta
@@ -272,12 +286,9 @@ def save(filename, obj, message=None):
 
 def preproc(config):
     word_counter, char_counter = Counter(), Counter()
-    train_examples, train_eval = process_file(
-        config.train_file, "train", word_counter, char_counter)
-    dev_examples, dev_eval = process_file(
-        config.dev_file, "dev", word_counter, char_counter)
-    test_examples, test_eval = process_file(
-        config.test_file, "test", word_counter, char_counter)
+    train_examples, train_eval = process_file(config.train_file, "train", word_counter, char_counter)
+    dev_examples, dev_eval = process_file(config.dev_file, "dev", word_counter, char_counter)
+    # test_examples, test_eval = process_file(config.test_file, "test", word_counter, char_counter)
 
     word_emb_file = config.fasttext_file if config.fasttext else config.glove_word_file
     char_emb_file = config.glove_char_file if config.pretrained_char else None
@@ -289,19 +300,16 @@ def preproc(config):
     char_emb_mat, char2idx_dict = get_embedding(
         char_counter, "char", emb_file=char_emb_file, vec_size=char_emb_dim)
 
-    build_features(config, train_examples, "train",
-                   config.train_record_file, word2idx_dict, char2idx_dict)
-    dev_meta = build_features(config, dev_examples, "dev",
-                              config.dev_record_file, word2idx_dict, char2idx_dict)
-    test_meta = build_features(config, test_examples, "test",
-                               config.test_record_file, word2idx_dict, char2idx_dict, is_test=True)
+    build_features(config, train_examples, "train", config.train_record_file, word2idx_dict, char2idx_dict)
+    dev_meta = build_features(config, dev_examples, "dev", config.dev_record_file, word2idx_dict, char2idx_dict)
+    # test_meta = build_features(config, test_examples, "test", config.test_record_file, word2idx_dict, char2idx_dict, is_test=True)
 
     save(config.word_emb_file, word_emb_mat, message="word embedding")
     save(config.char_emb_file, char_emb_mat, message="char embedding")
     save(config.train_eval_file, train_eval, message="train eval")
     save(config.dev_eval_file, dev_eval, message="dev eval")
-    save(config.test_eval_file, test_eval, message="test eval")
-    save(config.dev_meta, dev_meta, message="dev meta")
-    save(config.test_meta, test_meta, message="test meta")
+    # save(config.test_eval_file, test_eval, message="test eval")
     save(config.word2idx_file, word2idx_dict, message="word dictionary")
     save(config.char2idx_file, char2idx_dict, message="char dictionary")
+    save(config.dev_meta, dev_meta, message="dev meta")
+    # save(config.test_meta, test_meta, message="test meta")
