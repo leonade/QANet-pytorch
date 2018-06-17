@@ -22,14 +22,14 @@ Lq = config.ques_limit
 class PosEncoder(nn.Module):
     def __init__(self, length):
         super().__init__()
-        freqs = torch.Tensor([10000 ** (-i / D) if i % 2 == 0 else -10000 ** (-(i - 1) / D) for i in
-                              range(D)]).unsqueeze(dim=1)
+        freqs = torch.Tensor(
+            [10000 ** (-i / D) if i % 2 == 0 else -10000 ** ((1 - i) / D) for i in range(D)]).unsqueeze(dim=1)
         phases = torch.Tensor([0 if i % 2 == 0 else math.pi / 2 for i in range(D)]).unsqueeze(dim=1)
         pos = torch.arange(length).repeat(D, 1)
-        self.pos_encoding = nn.Parameter(torch.sin(torch.add(torch.mul(pos, freqs), phases)).data, requires_grad=False)
+        self.pos_encoding = nn.Parameter(torch.sin(torch.add(torch.mul(pos, freqs), phases)), requires_grad=False)
 
     def forward(self, x):
-        x.add_(self.pos_encoding)
+        x = x + self.pos_encoding
         return x
 
 
@@ -62,7 +62,7 @@ class Highway(nn.Module):
         x = x.transpose(1, 2)
         for i in range(self.n):
             gate = F.sigmoid(self.gate[i](x))
-            nonlinear = F.relu(self.linear[i](x), inplace=True)
+            nonlinear = F.relu(self.linear[i](x))
             x = gate * nonlinear + (1 - gate) * x
         x = x.transpose(1, 2)
         return x
@@ -71,39 +71,39 @@ class Highway(nn.Module):
 class SelfAttention(nn.Module):
     def __init__(self):
         super().__init__()
-        Wo = torch.empty(batch_size, Dv * Nh, D)
-        Wqs = [torch.empty(batch_size, Dk, D) for _ in range(Nh)]
-        Wks = [torch.empty(batch_size, Dk, D) for _ in range(Nh)]
-        Wvs = [torch.empty(batch_size, Dv, D) for _ in range(Nh)]
+        Wo = torch.empty(D, Dv * Nh)
+        Wqs = [torch.empty(D, Dk) for _ in range(Nh)]
+        Wks = [torch.empty(D, Dk) for _ in range(Nh)]
+        Wvs = [torch.empty(D, Dv) for _ in range(Nh)]
         nn.init.kaiming_uniform_(Wo)
         for i in range(Nh):
             nn.init.kaiming_uniform_(Wqs[i])
             nn.init.kaiming_uniform_(Wks[i])
             nn.init.kaiming_uniform_(Wvs[i])
-        self.Wo = nn.Parameter(Wo.data)
-        self.Wqs = nn.ParameterList([nn.Parameter(X.data) for X in Wqs])
-        self.Wks = nn.ParameterList([nn.Parameter(X.data) for X in Wks])
-        self.Wvs = nn.ParameterList([nn.Parameter(X.data) for X in Wvs])
+        self.Wo = nn.Parameter(Wo)
+        self.Wqs = nn.ParameterList([nn.Parameter(X) for X in Wqs])
+        self.Wks = nn.ParameterList([nn.Parameter(X) for X in Wks])
+        self.Wvs = nn.ParameterList([nn.Parameter(X) for X in Wvs])
 
-    def forward(self, x: torch.Tensor):
+    def forward(self, x):
         WQs, WKs, WVs = [], [], []
-        sqrt_dk_inv = 1/math.sqrt(Dk)
+        sqrt_dk_inv = 1 / math.sqrt(Dk)
+        x = x.transpose(1, 2)
         for i in range(Nh):
-            WQs.append(torch.bmm(self.Wqs[i], x))
-            WKs.append(torch.bmm(self.Wks[i], x))
-            WVs.append(torch.bmm(self.Wvs[i], x))
+            WQs.append(torch.matmul(x, self.Wqs[i]))
+            WKs.append(torch.matmul(x, self.Wks[i]))
+            WVs.append(torch.matmul(x, self.Wvs[i]))
         heads = []
         for i in range(Nh):
-            out = torch.bmm(WQs[i].transpose(1, 2), WKs[i])
+            out = torch.bmm(WQs[i], WKs[i].transpose(1, 2))
             out = torch.mul(out, sqrt_dk_inv)
             # not sure... I think `dim` should be 1 since it weighted each column of `WVs[i]`
             out = F.softmax(out, dim=1)
-            headi = torch.bmm(WVs[i], out)
-            WVs[i], WKs[i], WQs[i] = None, None, None
+            headi = torch.bmm(out, WVs[i])
             heads.append(headi)
-        head = torch.cat(heads, dim=1)
-        out = torch.bmm(self.Wo, head)
-        return out
+        head = torch.cat(heads, dim=2)
+        out = torch.matmul(head, self.Wo)
+        return out.transpose(1, 2)
 
 
 class Embedding(nn.Module):
@@ -115,12 +115,12 @@ class Embedding(nn.Module):
 
     def forward(self, ch_emb, wd_emb):
         ch_emb = ch_emb.permute(0, 3, 1, 2)
-        # ch_emb = F.dropout(ch_emb, p=dropout_char, training=self.training)
+        ch_emb = F.dropout(ch_emb, p=dropout_char, training=self.training)
         ch_emb = self.conv2d(ch_emb)
-        ch_emb = F.relu(ch_emb, inplace=True)
+        ch_emb = F.relu(ch_emb)
         ch_emb, _ = torch.max(ch_emb, dim=3)
         ch_emb = ch_emb.squeeze()
-        # wd_emb = F.dropout(wd_emb, p=dropout, training=self.training)
+        wd_emb = F.dropout(wd_emb, p=dropout, training=self.training)
         wd_emb = wd_emb.transpose(1, 2)
         emb = torch.cat([ch_emb, wd_emb], dim=1)
         emb = self.conv1d(emb)
@@ -133,9 +133,7 @@ class EncoderBlock(nn.Module):
         super().__init__()
         self.convs = nn.ModuleList([DepthwiseSeparableConv(ch_num, ch_num, k) for _ in range(conv_num)])
         self.self_att = SelfAttention()
-        W = torch.empty(batch_size, ch_num, ch_num)
-        nn.init.kaiming_uniform_(W)
-        self.W = nn.Parameter(W.data)
+        self.fc = nn.Linear(ch_num, ch_num, bias=True)
         self.pos = PosEncoder(length)
         self.norm = nn.LayerNorm([D, length])
 
@@ -143,77 +141,85 @@ class EncoderBlock(nn.Module):
         out = self.pos(x)
         res = out
         for i, conv in enumerate(self.convs):
-            # out = self.norm(out)
+            out = self.norm(out)
             out = conv(out)
-            out = F.relu(out, inplace=True)
-            out.add_(res)
-            # if (i + 1) % 2 == 0:
-            #     out = F.dropout(out, p=dropout, training=self.training)
+            out = F.relu(out)
+            out = out + res
+            if (i + 1) % 2 == 0:
+                out = F.dropout(out, p=dropout, training=self.training)
             res = out
-            # out = self.norm(out)
+            out = self.norm(out)
         out = self.self_att(out)
-        out.add_(res)
+        out = out + res
         out = F.dropout(out, p=dropout, training=self.training)
         res = out
-        # out = self.norm(out)
-        out = torch.bmm(self.W, out)
-        out = F.relu(out, inplace=True)
+        out = self.norm(out)
+        out = self.fc(out.transpose(1, 2)).transpose(1, 2)
+        out = F.relu(out)
         out = out + res
-        # out = F.dropout(out, p=dropout, training=self.training)
+        out = F.dropout(out, p=dropout, training=self.training)
         return out
 
 
 class CQAttention(nn.Module):
     def __init__(self):
         super().__init__()
-        W = torch.empty(batch_size * Lc, 1, D * 3)
-        nn.init.kaiming_uniform_(W)
-        self.W = nn.Parameter(W.data)
+        w = torch.empty(D * 3)
+        nn.init.uniform_(w, -0.5, 0.5)
+        self.w = nn.Parameter(w)
 
     def forward(self, C, Q):
         ss = []
-        C = C.permute(0, 2, 1)
-        Q = Q.permute(0, 2, 1)
+        C = C.transpose(1, 2)
+        Q = Q.transpose(1, 2)
         for i in range(Lq):
             q = Q[:, i, :].unsqueeze(1)
             QCi = torch.mul(q, C)
             Qi = q.expand(batch_size, Lc, D)
-            Xi = torch.cat([Qi, C, QCi], dim=2).reshape(batch_size * Lc, D * 3).unsqueeze(2)
-            Si = torch.bmm(self.W, Xi).reshape(batch_size, Lc, 1)
+            Xi = torch.cat([Qi, C, QCi], dim=2)
+            Si = torch.matmul(Xi, self.w).unsqueeze(2)
             ss.append(Si)
         S = torch.cat(ss, dim=2)
         S1 = F.softmax(S, dim=2)
         S2 = F.softmax(S, dim=1)
         A = torch.bmm(S1, Q)
         B = torch.bmm(torch.bmm(S1, S2.transpose(1, 2)), C)
-        out = torch.cat([C, A, torch.mul(C, A), torch.mul(C, B)], dim=2).permute(0, 2, 1)
-        # out = F.dropout(out, p=dropout, training=self.training)
-        return out
+        out = torch.cat([C, A, torch.mul(C, A), torch.mul(C, B)], dim=2)
+        out = F.dropout(out, p=dropout, training=self.training)
+        return out.transpose(1, 2)
 
 
 class Pointer(nn.Module):
     def __init__(self):
         super().__init__()
-        W1 = torch.empty(batch_size, 1, D * 2)
-        W2 = torch.empty(batch_size, 1, D * 2)
-        nn.init.kaiming_uniform_(W1)
-        nn.init.kaiming_uniform_(W2)
-        self.W1 = nn.Parameter(W1.data)
-        self.W2 = nn.Parameter(W2.data)
+        w1 = torch.empty(D * 2)
+        w2 = torch.empty(D * 2)
+        nn.init.uniform_(w1, -0.5, 0.5)
+        nn.init.uniform_(w2, -0.5, 0.5)
+        self.w1 = nn.Parameter(w1)
+        self.w2 = nn.Parameter(w2)
 
-    def forward(self, M1, M2, M3):
+    def forward(self, M1, M2, M3, mask):
         X1 = torch.cat([M1, M2], dim=1)
         X2 = torch.cat([M1, M3], dim=1)
-        Y1 = torch.bmm(self.W1, X1).squeeze()
-        Y2 = torch.bmm(self.W2, X2).squeeze()
-        return Y1, Y2
+        Y1 = torch.matmul(self.w1, X1) * mask
+        Y2 = torch.matmul(self.w2, X2) * mask
+        min1, _ = torch.min(Y1, 1, keepdim=True)
+        min2, _ = torch.min(Y2, 1, keepdim=True)
+        max1, _ = torch.max(Y1, 1, keepdim=True)
+        max2, _ = torch.max(Y2, 1, keepdim=True)
+        Y1 = (Y1 - min1) / (max1 - min1) * mask
+        Y2 = (Y2 - min2) / (max2 - min2) * mask
+        p1 = F.log_softmax(Y1, dim=1)
+        p2 = F.log_softmax(Y2, dim=1)
+        return p1, p2
 
 
 class QANet(nn.Module):
     def __init__(self, word_mat, char_mat):
         super().__init__()
         if config.pretrained_char:
-            self.char_emb = nn.Embedding.from_pretrained(torch.Tensor(char_mat), freeze=True)
+            self.char_emb = nn.Embedding.from_pretrained(torch.Tensor(char_mat))
         else:
             char_mat = torch.Tensor(char_mat)
             nn.init.kaiming_uniform_(char_mat)
@@ -229,6 +235,7 @@ class QANet(nn.Module):
         self.out = Pointer()
 
     def forward(self, Cwid, Ccid, Qwid, Qcid):
+        mask = (torch.zeros_like(Cwid) != Cwid).float()
         Cw, Cc = self.word_emb(Cwid), self.char_emb(Ccid)
         Qw, Qc = self.word_emb(Qwid), self.char_emb(Qcid)
         C, Q = self.emb(Cc, Cw), self.emb(Qc, Qw)
@@ -239,5 +246,5 @@ class QANet(nn.Module):
         M1 = self.model_enc_blks(M0)
         M2 = self.model_enc_blks(M1)
         M3 = self.model_enc_blks(M2)
-        p1, p2 = self.out(M1, M2, M3)
+        p1, p2 = self.out(M1, M2, M3, mask)
         return p1, p2

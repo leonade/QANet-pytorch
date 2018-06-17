@@ -32,12 +32,13 @@ class SQuADDataset(Dataset):
         self.y2s = torch.from_numpy(data["y2s"]).long()
         self.ids = torch.from_numpy(data["ids"]).long()
         num = len(self.ids)
-        self.num_steps = num_steps
         self.batch_size = batch_size
+        self.num_steps = num_steps if num_steps >= 0 else num // batch_size
+        num_items = num_steps * batch_size
         idxs = list(range(num))
         self.idx_map = []
         i, j = 0, num
-        num_items = num_steps * batch_size
+
         while j <= num_items:
             random.shuffle(idxs)
             self.idx_map += idxs.copy()
@@ -51,7 +52,10 @@ class SQuADDataset(Dataset):
 
     def __getitem__(self, item):
         idxs = torch.LongTensor(self.idx_map[item:item + self.batch_size])
-        res = (self.context_idxs[idxs], self.context_char_idxs[idxs], self.ques_idxs[idxs], self.ques_char_idxs[idxs],
+        res = (self.context_idxs[idxs],
+               self.context_char_idxs[idxs],
+               self.ques_idxs[idxs],
+               self.ques_char_idxs[idxs],
                self.y1s[idxs],
                self.y2s[idxs], self.ids[idxs])
         return res
@@ -133,52 +137,72 @@ def metric_max_over_ground_truths(metric_fn, prediction, ground_truths):
     return max(scores_for_ground_truths)
 
 
-def train(model, optimizer, dataset, start, length):
+def train(model, optimizer, scheduler, dataset, start, length):
     model.train()
     losses = []
     for i in tqdm(range(start, length + start), total=length):
-        model.zero_grad()
+        optimizer.zero_grad()
         Cwid, Ccid, Qwid, Qcid, y1, y2, ids = dataset[i]
         Cwid, Ccid, Qwid, Qcid = Cwid.to(device), Ccid.to(device), Qwid.to(device), Qcid.to(device)
         p1, p2 = model(Cwid, Ccid, Qwid, Qcid)
         y1, y2 = y1.to(device), y2.to(device)
-        loss1 = F.cross_entropy(p1, y1)
-        loss2 = F.cross_entropy(p2, y2)
+        loss1 = F.nll_loss(p1, y1)
+        loss2 = F.nll_loss(p2, y2)
         loss = loss1 + loss2
         losses.append(loss.item())
         loss.backward()
         optimizer.step()
+        scheduler.step()
     loss_avg = np.mean(losses)
-    print("EPOCH {:8d} loss {:8f}\n".format(i + 1, loss_avg))
+    print("STEP {:8d} loss {:8f}\n".format(i + 1, loss_avg))
 
 
-def test(model, dataset, eval_file, epoch):
+def test(model, dataset, eval_file):
     model.eval()
     answer_dict = {}
     losses = []
-    num_batches = len(dataset)
+    num_batches = config.val_num_batches
     with torch.no_grad():
-        for i in tqdm(range(1, num_batches + 1), total=num_batches):
+        for i in tqdm(random.sample(range(0, len(dataset)), num_batches), total=num_batches):
             Cwid, Ccid, Qwid, Qcid, y1, y2, ids = dataset[i]
             Cwid, Ccid, Qwid, Qcid = Cwid.to(device), Ccid.to(device), Qwid.to(device), Qcid.to(device)
             p1, p2 = model(Cwid, Ccid, Qwid, Qcid)
             y1, y2 = y1.to(device), y2.to(device)
-            loss1 = F.cross_entropy(p1, y1)
-            loss2 = F.cross_entropy(p2, y2)
+            loss1 = F.nll_loss(p1, y1)
+            loss2 = F.nll_loss(p2, y2)
             loss = loss1 + loss2
             losses.append(loss.item())
             yp1 = torch.argmax(p1, 1)
             yp2 = torch.argmax(p2, 1)
-            answer_dict_, _ = convert_tokens(eval_file, ids.tolist(), yp1.tolist(), yp2.tolist())
+            yps = torch.stack([yp1, yp2], dim=1)
+            ymin, _ = torch.min(yps, 1)
+            ymax, _ = torch.max(yps, 1)
+            answer_dict_, _ = convert_tokens(eval_file, ids.tolist(), ymin.tolist(), ymax.tolist())
             answer_dict.update(answer_dict_)
     loss = np.mean(losses)
     metrics = evaluate(eval_file, answer_dict)
-    f = open("log/ans_{}.json".format(epoch), "w")
+    f = open("log/answers.json", "w")
     json.dump(answer_dict, f)
     f.close()
     metrics["loss"] = loss
-    print("EPOCH {:8d} loss {:8f} F1 {:8f} EM {:8f}\n".format(epoch, loss, metrics["f1"], metrics["exact_match"]))
+    print("EVAL loss {:8f} F1 {:8f} EM {:8f}\n".format(loss, metrics["f1"], metrics["exact_match"]))
     return metrics
+
+
+def print_weight(model, N, idx):
+    res = {}
+    res['char_emb'] = {"data": model.char_emb.weight.data[0:N].tolist(),
+                       "grad": model.char_emb.weight.grad[0:N].tolist()}
+    res['emb_conv2d'] = {"data": model.emb.conv2d.pointwise_conv.weight.data[0:N].tolist(),
+                         "grad": model.emb.conv2d.pointwise_conv.weight.grad[0:N].tolist()}
+    res['cqatt'] = {"data": model.cq_att.w.data[0:N].tolist(), "grad": model.cq_att.w.grad[0:N].tolist()}
+    res['enc_blks'] = {"data": model.model_enc_blks[6].fc.weight.data[0:N].tolist(),
+                       "grad": model.model_enc_blks[6].fc.weight.grad[0:N].tolist()}
+    res['point1'] = {"data": model.out.w1.data[0:N].tolist(), "grad": model.out.w1.grad[0:N].tolist()}
+    res['point2'] = {"data": model.out.w2.data[0:N].tolist(), "grad": model.out.w2.grad[0:N].tolist()}
+    f = open("log/W_{}.json".format(idx), "w")
+    json.dump(res, f)
+    f.close()
 
 
 def train_entry(config):
@@ -194,24 +218,36 @@ def train_entry(config):
     print("Building model...")
 
     train_dataset = SQuADDataset(config.train_record_file, config.num_steps, config.batch_size)
-    dev_dataset = SQuADDataset(config.dev_record_file, config.val_num_batches, config.batch_size)
+    dev_dataset = SQuADDataset(config.dev_record_file, -1, config.batch_size)
 
     lr = config.learning_rate
+    base_lr = 1.0
+    lr_warm_up_num = config.lr_warm_up_num
 
     model = QANet(word_mat, char_mat).to(device)
     parameters = filter(lambda param: param.requires_grad, model.parameters())
-    optimizer = optim.Adam(betas=(0.8, 0.999), eps=1e-7, weight_decay=3e-7, params=parameters)
-    crit = lr / math.log2(1000)
-    scheduler = optim.lr_scheduler.LambdaLR(optimizer, lr_lambda=lambda ee: crit * math.log2(
-        ee + 1) if ee + 1 <= 1000 else lr)
+    optimizer = optim.Adam(lr=base_lr, betas=(0.8, 0.999), eps=1e-7, weight_decay=3e-7, params=parameters)
+    # optimizer = optim.SparseAdam(lr=lr, betas=(0.8, 0.999), eps=1e-7, params=parameters)
+    cr = lr / math.log2(lr_warm_up_num)
+    scheduler = optim.lr_scheduler.LambdaLR(
+        optimizer,
+        lr_lambda=lambda ee: cr * math.log2(ee + 1) if ee < lr_warm_up_num else lr)
     L = config.checkpoint
     N = config.num_steps
     best_f1 = 0
     best_em = 0
     patience = 0
-    for ep in range(0, N, L):
-        train(model, scheduler, train_dataset, ep, L)
-        metrics = test(model, dev_dataset, dev_eval_file, ep + L)
+    unused = True
+    for iter in range(0, N, L):
+        train(model, optimizer, scheduler, train_dataset, iter, L)
+        metrics = test(model, dev_dataset, dev_eval_file)
+        if iter + L >= lr_warm_up_num - 1 and unused:
+            optimizer.param_groups[0]['initial_lr'] = lr
+            scheduler = optim.lr_scheduler.ExponentialLR(optimizer, 0.9999)
+            unused = False
+        if config.print_weight:
+            print_weight(model, 5, iter + L)
+        print(scheduler.get_lr())
         dev_f1 = metrics["f1"]
         dev_em = metrics["exact_match"]
         if dev_f1 < best_f1 and dev_em < best_em:
@@ -223,7 +259,7 @@ def train_entry(config):
             best_f1 = max(best_f1, dev_f1)
             best_em = max(best_em, dev_em)
 
-        fn = os.path.join(config.save_dir, "model_{}.ckpt".format(ep))
+        fn = os.path.join(config.save_dir, "model.ckpt".format(iter+L))
         torch.save(model, fn)
 
 
@@ -231,61 +267,21 @@ def test_entry(config):
     pass
 
 
-def dev(config):
-    from models import QANet
-
-    with open(config.word_emb_file, "r") as fh:
-        word_mat = np.array(json.load(fh), dtype=np.float32)
-    with open(config.char_emb_file, "r") as fh:
-        char_mat = np.array(json.load(fh), dtype=np.float32)
-    with open(config.dev_eval_file, "r") as fh:
-        dev_eval_file = json.load(fh)
-
-    print("Building model...")
-
-    train_dataset = SQuADDataset(config.train_record_file, config.num_steps, config.batch_size)
-    dev_dataset = SQuADDataset(config.dev_record_file, config.val_num_batches, config.batch_size)
-
-    lr = config.learning_rate
-
-    model = QANet(word_mat, char_mat).to(device)
-    parameters = filter(lambda param: param.requires_grad, model.parameters())
-    optimizer = optim.Adam(betas=(0.8, 0.999), eps=1e-7, weight_decay=3e-7, params=parameters)
-    crit = lr / math.log2(1000)
-    scheduler = optim.lr_scheduler.LambdaLR(optimizer, lr_lambda=lambda ee: crit * math.log2(
-        ee + 1) if ee + 1 <= 1000 else lr)
-    L = config.checkpoint
-    N = config.num_steps
-    for ep in range(0, N, L):
-        train(model, scheduler, train_dataset, ep, L)
-        res = {}
-        N = 3
-        res['char_emb'] = {"data": model.char_emb.weight.data[0:N].tolist(),
-                           "grad": model.char_emb.weight.grad[0:N].tolist()}
-        res['emb_conv2d'] = {"data": model.emb.conv2d.pointwise_conv.weight.data[0:N].tolist(),
-                             "grad": model.emb.conv2d.pointwise_conv.weight.grad[0:N].tolist()}
-        res['cqatt'] = {"data": model.cq_att.W.data[0:N].tolist(), "grad": model.cq_att.W.grad[0:N].tolist()}
-        res['enc_blks'] = {"data": model.model_enc_blks[6].W.data[0:N].tolist(),
-                           "grad": model.model_enc_blks[6].W.grad[0:N].tolist()}
-        f = open("log/W_{}.json".format(ep+L), "w")
-        json.dump(res, f)
-        f.close()
-
 def main(_):
     if config.mode == "train":
         train_entry(config)
     elif config.mode == "data":
         preproc(config)
     elif config.mode == "debug":
-        config.num_steps = 2
+        config.print_weight = True
+        config.batch_size = 2
+        config.num_steps = 32
         config.val_num_batches = 2
-        config.checkpoint = 1
+        config.checkpoint = 2
         config.period = 1
         train_entry(config)
     elif config.mode == "test":
         test_entry(config)
-    elif config.mode == "dev":
-        dev(config)
     else:
         print("Unknown mode")
         exit(0)

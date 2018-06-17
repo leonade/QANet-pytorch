@@ -94,7 +94,7 @@ def get_embedding(counter, data_type, limit=-1, emb_file=None, vec_size=None):
                 vector_size = max(vec_size, len(array)-1)
                 #word = "".join(array[0:-vec_size])
                 word = array[0]
-                vector = list(map(float, array[-vec_size:]))
+                vector = list(map(float, array[-vector_size:]))
                 if word in counter and counter[word] > limit:
                     embedding_dict[word] = vector
         print("{} / {} tokens have corresponding {} embedding vector".format(
@@ -109,8 +109,7 @@ def get_embedding(counter, data_type, limit=-1, emb_file=None, vec_size=None):
 
     NULL = "--NULL--"
     OOV = "--OOV--"
-    token2idx_dict = {token: idx for idx,
-                                     token in enumerate(embedding_dict.keys(), 2)}
+    token2idx_dict = {token: idx for idx, token in enumerate(embedding_dict.keys(), 2)}
     token2idx_dict[NULL] = 0
     token2idx_dict[OOV] = 1
     embedding_dict[NULL] = [0. for _ in range(vec_size)]
