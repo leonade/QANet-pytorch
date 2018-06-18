@@ -11,7 +11,7 @@ home = os.path.expanduser(".")
 train_file = os.path.join(home, "data", "squad", "train-v1.1.json")
 dev_file = os.path.join(home, "data", "squad", "dev-v1.1.json")
 test_file = os.path.join(home, "data", "squad", "dev-v1.1.json")
-glove_word_file = os.path.join(home, "data", "glove", "glove.840B.300d.txt")
+glove_word_file = os.path.join(home, "data", "glove", "glove.6B.50d.txt")
 
 target_dir = "data"
 event_dir = "log"
@@ -68,7 +68,7 @@ flags.DEFINE_string("answer_file", answer_file, "")
 
 flags.DEFINE_integer("glove_char_size", 94, "Corpus size for Glove")
 flags.DEFINE_integer("glove_word_size", int(2.2e6), "Corpus size for Glove")
-flags.DEFINE_integer("glove_dim", 128, "Embedding dimension for Glove")
+flags.DEFINE_integer("glove_dim", 32, "Embedding dimension for Glove")
 flags.DEFINE_integer("char_dim", 32, "Embedding dimension for char")
 
 flags.DEFINE_integer("para_limit", 400, "Limit length for paragraph")
@@ -86,7 +86,7 @@ flags.DEFINE_boolean("is_bucket", False, "build bucket batch iterator or not")
 flags.DEFINE_list("bucket_range", [40, 401, 40], "the range of bucket")
 
 flags.DEFINE_integer("batch_size", 8, "Batch size")
-flags.DEFINE_integer("num_steps", 3000, "Number of steps")
+flags.DEFINE_integer("num_steps", 50000, "Number of steps")
 flags.DEFINE_integer("evalpoint", 10, "checkpoint to evaluate the model")
 flags.DEFINE_integer("checkpoint", 500, "checkpoint to save the model")
 flags.DEFINE_integer("period", 10, "period to save batch loss")
@@ -94,9 +94,9 @@ flags.DEFINE_integer("val_num_batches", 5, "Number of batches to evaluate the mo
 flags.DEFINE_float("dropout", 0.1, "Dropout prob across the layers")
 flags.DEFINE_float("dropout_char", 0.05, "Dropout prob across the layers")
 flags.DEFINE_float("grad_clip", 5.0, "Global Norm gradient clipping rate")
-flags.DEFINE_float("learning_rate", 0.001, "Learning rate")
+flags.DEFINE_float("learning_rate", 0.01, "Learning rate")
 flags.DEFINE_integer("lr_warm_up_num", 1000, "Number of warm-up steps of learning rate")
-flags.DEFINE_float("decay", 0.9999, "Exponential moving average decay")
+flags.DEFINE_float("decay", 0.9998, "Exponential moving average decay")
 # flags.DEFINE_float("l2_norm", 3e-7, "L2 norm scale")
 flags.DEFINE_integer("early_stop", 10, "Checkpoints for early stop")
 flags.DEFINE_integer("connector_dim", 128, "Dimension of connectors of each layer")

@@ -15,6 +15,8 @@ import torch.nn.functional as F
 import torch.optim as optim
 import torch.cuda
 from torch.utils.data import Dataset
+from tensorboard_logger import configure as logger_configure, log_value
+from datetime import datetime
 
 '''
 Some functions are from the official evaluation script.
@@ -153,6 +155,9 @@ def train(model, optimizer, scheduler, dataset, start, length):
         loss.backward()
         optimizer.step()
         scheduler.step()
+        log_value('loss', loss.item(),i)
+        log_value('loss1', loss1.item(),i)
+        log_value('loss2', loss2.item(),i)
     loss_avg = np.mean(losses)
     print("STEP {:8d} loss {:8f}\n".format(i + 1, loss_avg))
 
@@ -243,11 +248,11 @@ def train_entry(config):
         metrics = test(model, dev_dataset, dev_eval_file)
         if iter + L >= lr_warm_up_num - 1 and unused:
             optimizer.param_groups[0]['initial_lr'] = lr
-            scheduler = optim.lr_scheduler.ExponentialLR(optimizer, 0.9999)
+            scheduler = optim.lr_scheduler.ExponentialLR(optimizer, config.decay)
             unused = False
         if config.print_weight:
             print_weight(model, 5, iter + L)
-        print(scheduler.get_lr())
+        print('Learning rate:', scheduler.get_lr())
         dev_f1 = metrics["f1"]
         dev_em = metrics["exact_match"]
         if dev_f1 < best_f1 and dev_em < best_em:
@@ -259,7 +264,7 @@ def train_entry(config):
             best_f1 = max(best_f1, dev_f1)
             best_em = max(best_em, dev_em)
 
-        fn = os.path.join(config.save_dir, "model.ckpt".format(iter+L))
+        fn = os.path.join(config.save_dir, "model_{}.ckpt".format(iter+L))
         torch.save(model, fn)
 
 
@@ -268,6 +273,11 @@ def test_entry(config):
 
 
 def main(_):
+    print('device:', device)
+    run = datetime.now().strftime("%Y-%m-%d %I:%M")
+    logger_configure("runs/"+run, flush_secs=5)
+    config.save_dir = config.save_dir+'/'+run
+    os.mkdir(config.save_dir)
     if config.mode == "train":
         train_entry(config)
     elif config.mode == "data":
