@@ -89,8 +89,13 @@ def get_embedding(counter, data_type, limit=-1, emb_file=None, vec_size=None):
     if emb_file is not None:
         assert vec_size is not None
         with open(emb_file, "r", encoding="utf-8") as fh:
+            i=0
             for line in tqdm(fh):
-                array = line.split()
+                i+=1
+                array = line.split(' ')
+                if i!=1 and len(array) != vector_size+1:
+                    print('skip wrong embedding line\n', i, '\n', line, '\n', array, '\n' )
+                    continue
                 vector_size = max(vec_size, len(array)-1)
                 #word = "".join(array[0:-vec_size])
                 word = array[0]
@@ -197,20 +202,20 @@ def build_features(config, examples, data_type, out_file, word2idx_dict, char2id
     total_ = 0
     meta = {}
     N = len(examples)
-    context_idxs = np.zeros([N, para_limit], dtype=np.int32)
-    context_char_idxs = np.zeros([N, para_limit, char_limit], dtype=np.int32)
-    ques_idxs = np.zeros([N, ques_limit], dtype=np.int32)
-    ques_char_idxs = np.zeros([N, ques_limit, char_limit], dtype=np.int32)
-    y1s = np.zeros([N], dtype=np.int32)
-    y2s = np.zeros([N], dtype=np.int32)
-    ids = np.zeros([N], dtype=np.int64)
-    # context_idxs = []
-    # context_char_idxs = []
-    # ques_idxs = []
-    # ques_char_idxs = []
-    # y1s = []
-    # y2s = []
-    # ids = []
+    # context_idxs = np.zeros([N, para_limit], dtype=np.int32)
+    # context_char_idxs = np.eros([N, para_limit, char_limit], dtype=np.int32)
+    # ques_idxs = np.zeros([N, ques_limit], dtype=np.int32)
+    # ques_char_idxs = np.zeros([N, ques_limit, char_limit], dtype=np.int32)
+    # y1s = np.zeros([N], dtype=np.int32)
+    # y2s = np.zeros([N], dtype=np.int32)
+    # ids = np.zeros([N], dtype=np.int64)
+    context_idxs = []
+    context_char_idxs = []
+    ques_idxs = []
+    ques_char_idxs = []
+    y1s = []
+    y2s = []
+    ids = []
     for n, example in enumerate(tqdm(examples)):
         total_ += 1
 
@@ -238,12 +243,14 @@ def build_features(config, examples, data_type, out_file, word2idx_dict, char2id
         for i, token in enumerate(example["context_tokens"]):
             if i == para_limit:
                 break
-            context_idxs[n][i] = _get_word(token)
+            context_idx[i] = _get_word(token)
+        context_idxs.append(context_idx)
 
         for i, token in enumerate(example["ques_tokens"]):
             if i == ques_limit:
                 break
-            ques_idxs[n][i] = _get_word(token)
+            ques_idx[i] = _get_word(token)
+        ques_idxs.append(ques_idx)
 
         for i, token in enumerate(example["context_chars"]):
             if i == para_limit:
